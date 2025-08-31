@@ -1,0 +1,20 @@
+# Dr. Walter Reed's Interventional Cardiology A2A Agent
+# Production dependencies
+
+# Official A2A SDK with all necessary extras
+a2a-sdk[http-server,telemetry,sql]>=0.3.3
+
+# Claude API client for LLM integration
+anthropic>=0.64.0
+
+# Environment variable loading for local development
+python-dotenv>=1.1.1
+
+# Web server (included with A2A SDK but specified for clarity)
+uvicorn>=0.24.0
+
+# Development and testing dependencies
+# (Add these when needed for testing)
+# pytest>=7.0.0
+# pytest-asyncio>=0.21.0
+# httpx>=0.25.0  # For test client
