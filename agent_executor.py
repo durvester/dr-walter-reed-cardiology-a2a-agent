@@ -27,7 +27,7 @@ import anthropic
 from a2a.server.agent_execution.agent_executor import AgentExecutor
 from a2a.server.agent_execution.context import RequestContext
 from a2a.server.events.event_queue import EventQueue
-from a2a.types import Message, TextPart
+from a2a.types import Message, TextPart, Task, TaskStatus, TaskState
 
 from config import config
 
@@ -87,8 +87,9 @@ class InterventionalCardiologyExecutor(AgentExecutor):
             # Extract text content from the incoming message parts
             user_text = self._extract_text_from_message(incoming_message)
             if not user_text.strip():
-                await self._send_message(event_queue, 
-                    "Hello! How can I assist you with our interventional cardiology services today?"
+                await self._send_task_response(event_queue, 
+                    "Hello! How can I assist you with our interventional cardiology services today?",
+                    context
                 )
                 return
             
@@ -96,9 +97,10 @@ class InterventionalCardiologyExecutor(AgentExecutor):
             
             # Validate input for security (following A2A best practices)
             if not self._validate_input_security(user_text):
-                await self._send_message(event_queue,
+                await self._send_task_response(event_queue,
                     "I'm here to assist with medical information and coordination. "
-                    "Please ask about our interventional cardiology services."
+                    "Please ask about our interventional cardiology services.",
+                    context
                 )
                 return
             
@@ -109,7 +111,7 @@ class InterventionalCardiologyExecutor(AgentExecutor):
             response_text = await self._generate_medical_response(conversation_messages)
             
             # Send the response via A2A event queue
-            await self._send_message(event_queue, response_text)
+            await self._send_task_response(event_queue, response_text, context)
             
             logger.info(f"Successfully processed task {context.task_id}")
             
@@ -117,10 +119,11 @@ class InterventionalCardiologyExecutor(AgentExecutor):
             logger.error(f"Error processing task {context.task_id}: {str(e)}")
             
             # Send error response following A2A patterns
-            await self._send_message(event_queue,
+            await self._send_task_response(event_queue,
                 "I apologize, but I'm experiencing technical difficulties. "
                 "Please try again later. For urgent medical matters, please contact "
-                "our office directly."
+                "our office directly.",
+                context
             )
     
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
@@ -138,13 +141,8 @@ class InterventionalCardiologyExecutor(AgentExecutor):
         text_parts = []
         
         for part in message.parts:
-            # A2A Part is a discriminated union - need to access the root
-            if hasattr(part, 'root'):
-                actual_part = part.root
-                if hasattr(actual_part, 'text') and actual_part.text:
-                    text_parts.append(actual_part.text.strip())
-            # Fallback for direct TextPart (if any)
-            elif hasattr(part, 'text') and part.text:
+            # Simple direct access to text parts
+            if hasattr(part, 'text') and part.text:
                 text_parts.append(part.text.strip())
         
         return " ".join(text_parts)
@@ -230,35 +228,44 @@ class InterventionalCardiologyExecutor(AgentExecutor):
                 "cardiology assistance."
             )
     
-    async def _send_message(self, event_queue: EventQueue, text: str) -> None:
+    async def _send_task_response(self, event_queue: EventQueue, text: str, context: RequestContext) -> None:
         """
-        Send a message via A2A EventQueue following proper SDK patterns.
+        Send a Task response via A2A EventQueue.
         
-        Creates a properly formatted A2A Message and enqueues it.
+        Creates a simple Task object with the agent response and sends it.
         """
         try:
-            # Create TextPart with the response
-            text_part = TextPart(text=text)
-            
-            # Create A2A Message with proper fields
-            message = Message(
+            # Create agent response message
+            agent_message = Message(
                 message_id=str(uuid.uuid4()),
                 role="agent",
-                parts=[text_part],
+                parts=[TextPart(text=text)],
                 metadata={
-                    "agent_type": "interventional_cardiology",
-                    "practice": config.agent.practice_name,
                     "timestamp": self._get_current_timestamp()
                 }
             )
             
-            # Send via A2A event queue
-            await event_queue.enqueue_event(message)
+            # Build history with user message + agent response
+            history = [context.message, agent_message] if context.message else [agent_message]
             
-            logger.debug(f"Sent message via A2A event queue: {text[:100]}...")
+            # Create simple Task object
+            task_id = context.task_id or str(uuid.uuid4())
+            
+            task = Task(
+                id=task_id,
+                context_id=task_id,
+                status=TaskStatus(state=TaskState.completed),
+                history=history,
+                artifacts=[]
+            )
+            
+            # Send Task via event queue
+            await event_queue.enqueue_event(task)
+            
+            logger.debug(f"Sent task response: {text[:50]}...")
             
         except Exception as e:
-            logger.error(f"Failed to send message via event queue: {str(e)}")
+            logger.error(f"Failed to send task: {str(e)}")
             raise
     
     def _get_current_timestamp(self) -> str:
